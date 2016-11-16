@@ -103,9 +103,18 @@ plot(bankdata.in.new$noijy, bankdata.in.new$Default.Flag, pch = 16, xlab = "noij
 
 #Measures of leverage: 
 #Total debt over total assets- "liab/asset"
+plot(bankdata.in.new$liab/bankdata.in.new$asset, 
+     bankdata.in.new$Default.Flag, pch = 16, xlab = "liab/asset", ylab = "PD")
+
 #Total debt over Net operating income- "liab/idpretx"
-#Average equity over total debt- "eq5/liab", Net loans&leases over core deposits- "idlncorr"
-#Common tier 1 equity over risk-adjusted assets- "rbct1cer".
+plot(bankdata.in.new$liab/bankdata.in.new$idpretx, 
+     bankdata.in.new$Default.Flag, pch = 16, xlab = "debt/NOPAT", ylab = "PD")
+
+#Average equity over total debt- "eq5/liab" Net loans&leases over core deposits- "idlncorr"
+plot(bankdata.in.new$eq5/bankdata.in.new$liab, 
+     bankdata.in.new$Default.Flag, pch = 16, xlab = "avg_equity/total_debt", ylab = "PD")
+
+#Common tier 1 equity over risk-adjusted assets- "rbct1cer"
 
 #Measures of debt coverage: 
 #Pre-tax Net operating income over interest expense- "idpretx/eintexp"
