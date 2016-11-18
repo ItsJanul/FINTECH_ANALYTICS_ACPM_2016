@@ -3,6 +3,15 @@
 #Fintech Analytics (INTA-GB.2320.10)
 #FALL 2016
 
+#LIBRARIES-----------------------------------------------------------------
+library(lubridate)
+bankdata.in.new$adjust_repdte<- bankdata.in.new$repdte %month+% 3
+bankdata.in.new$days.to.default<- ifelse(bankdata.in.new$Default.Flag, bankdata.in.new$Default.Date-bankdata.in.new$adjust_repdte)
+bankdata.in.new$Default.Date<- as.Date(bankdata.in.new$Default.Date, "%m/%d/%y")
+bankdata.in.new$days.to.default<- bankdata.in.new$Default.Date-bankdata.in.new$adjust_repdte
+bankdata.in.new$default.in.cur.year<- bankdata.in.new$days.to.default >0 & bankdata.in.new$days.to.default < 366
+bankdata.in.new$Default.Flag<- ifelse(bankdata.in.new$default.in.cur.year, 1, 0)
+
 #FUNCTIONS--------------------------------------------------------------------------------------------------------------------------
 
 
@@ -132,22 +141,8 @@ plot(bankdata.in.new$eq5/bankdata.in.new$liab,
 #Adding default flags to bank data
 bankdata.in.new$Default.Flag =ifelse(is.na(bankdata.in.new$Default.Date), 0, 1)
 
-#New Variable Interest Coverage
-bankdata.in.new$Interest.Cov = sapply(1:length(bankdata.in.new$Default.Date), function(i){ifelse(is.na(bankdata.in.new$noij[i]), 0, bankdata.in.new$noij[i]/bankdata.in.new$idpretx[i])})
-
-#Finding which banks defaulted
-test2 <- bankdata.in.new[bankdata.in.new$Default.Flag == 1, ]
-
-
-#Equity capital to assets
-model1<- glm(bankdata.in.new$Default.Flag ~ bankdata.in.new$eqv , family= binomial(link = logit),na.action = na.exclude)
-plot(bankdata.in.new$asset, bankdata.in.new$Default.Flag, pch = 16, xlab = "Asset", ylab = "PD")
-
-
-#Net operating income/Pre-tax net operating income
-model2<- glm(bankdata.in.new$Default.Flag ~ bankdata.in.new$Interest.Cov , family= binomial(link = logit),na.action = na.exclude)
-plot(bankdata.in.new$Interest.Cov, bankdata.in.new$Default.Flag, pch = 16, xlab = "Interest Coverage", ylab = "PD")
-
+#adjust for repdte date 4 month lag
+bankdata.in.new$repdte_adjust<- bankdata.in.new$repdte %m+% months(3)
 
 #Total assets
 model3<- glm(bankdata.in.new$Default.Flag ~ bankdata.in.new$asset , family= binomial(link = logit),na.action = na.exclude)
