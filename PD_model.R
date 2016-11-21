@@ -5,12 +5,7 @@
 
 #LIBRARIES-----------------------------------------------------------------
 library(lubridate)
-bankdata.in.new$adjust_repdte<- bankdata.in.new$repdte %month+% 3
-bankdata.in.new$days.to.default<- ifelse(bankdata.in.new$Default.Flag, bankdata.in.new$Default.Date-bankdata.in.new$adjust_repdte)
-bankdata.in.new$Default.Date<- as.Date(bankdata.in.new$Default.Date, "%m/%d/%y")
-bankdata.in.new$days.to.default<- bankdata.in.new$Default.Date-bankdata.in.new$adjust_repdte
-bankdata.in.new$default.in.cur.year<- bankdata.in.new$days.to.default >0 & bankdata.in.new$days.to.default < 366
-bankdata.in.new$Default.Flag<- ifelse(bankdata.in.new$default.in.cur.year, 1, 0)
+library(tidyverse)
 
 #FUNCTIONS--------------------------------------------------------------------------------------------------------------------------
 
@@ -101,32 +96,58 @@ applyCalibCurve	<-	function(x,	map,	baseline=NULL)
   return(p.star)	
 }
 
-#DATA VIZ FOR ANALYSIS OF VARIABLES----------------------------------------------------------------------------------------------
+
+
+
+#RUNNING CODE--------------------------------------------------------------------------------------------------------------------
+
+#creating a tibble called bankdata
+bankdata<-as_data_frame(bankdata.in.new)
+head(bankdata)
+
+
+#All date adjustments and flags are below
+bankdata<- bankdata %>%
+  mutate(Default.Date= mdy(Default.Date)) %>%
+  mutate(repdte.adjust= repdte %m+% months(3)) %>%
+  mutate(days.to.default= ifelse (is.na(Default.Date), NA, 
+                                  Default.Date-repdte.adjust)) %>%
+  mutate(default.flag= ifelse (is.na(days.to.default), 0, ifelse(days.to.default >0 & days.to.default <= 365.25, 1, 0)))
+
+#DATA VIZ FOR ANALYSIS OF VARIABLES------
 
 #Measures of profitability: 
 #Pre-tax return on assets- "roaptx" 
-plot(bankdata.in.new$roaptx, bankdata.in.new$Default.Flag, pch = 16, xlab = "roaptx", ylab = "PD")
+plot(bankdata$roaptx, bankdata$default.flag, pch = 16, xlab = "roaptx", ylab = "PD")
+hist(bankdata$roaptx)
+hist(log(bankdata$roaptx)) #normal distributed
 
 #Net operating income over assets- "noijy"
-plot(bankdata.in.new$noijy, bankdata.in.new$Default.Flag, pch = 16, xlab = "noijy", ylab = "PD")
+plot(bankdata$noijy, bankdata$default.flag, pch = 16, xlab = "noijy", ylab = "PD")
+hist(bankdata$noij)
+hist(log(bankdata$noij)) #normal distributed
 
 #Measures of leverage: 
 #Total debt over total assets- "liab/asset"
-plot(bankdata.in.new$liab/bankdata.in.new$asset, 
-     bankdata.in.new$Default.Flag, pch = 16, xlab = "liab/asset", ylab = "PD")
+plot(bankdata$liab/bankdata$asset, 
+     bankdata$default.flag, pch = 16, xlab = "liab/asset", ylab = "PD")
 
 #Total debt over Net operating income- "liab/idpretx"
-plot(bankdata.in.new$liab/bankdata.in.new$idpretx, 
-     bankdata.in.new$Default.Flag, pch = 16, xlab = "debt/NOPAT", ylab = "PD")
+plot(bankdata$liab/(bankdata$idpretx+1), 
+     bankdata$default.flag, pch = 16, xlab = "debt/NOPAT", ylab = "PD")
 
 #Average equity over total debt- "eq5/liab" Net loans&leases over core deposits- "idlncorr"
-plot(bankdata.in.new$eq5/bankdata.in.new$liab, 
-     bankdata.in.new$Default.Flag, pch = 16, xlab = "avg_equity/total_debt", ylab = "PD")
+plot(bankdata$eq5/bankdata$liab, 
+     bankdata$default.flag, pch = 16, xlab = "avg_equity/total_debt", ylab = "PD")
 
 #Common tier 1 equity over risk-adjusted assets- "rbct1cer"
+plot(bankdata$rbct1cer, bankdata$default.flag, pch = 16, xlab = "equity/risk-adj assets", ylab = "PD")
 
 #Measures of debt coverage: 
 #Pre-tax Net operating income over interest expense- "idpretx/eintexp"
+plot(bankdata$idpretx/(bankdata$eintexp+1), 
+     bankdata$default.flag, pch = 16, xlab = "NOPAT/Interets_Exp", ylab = "PD")
+
 #Net income minus cash dividends over interest expense- "(netinc-eqcdiv)/eintexp"
 
 #Measure of liquidity: 
@@ -134,24 +155,4 @@ plot(bankdata.in.new$eq5/bankdata.in.new$liab,
 
 #Measures of size: Adjusted average assets- "avassetj" 
 #Average assets- "asset5"
-
-
-#RUNNING CODE--------------------------------------------------------------------------------------------------------------------
-
-#Adding default flags to bank data
-bankdata.in.new$Default.Flag =ifelse(is.na(bankdata.in.new$Default.Date), 0, 1)
-
-#adjust for repdte date 4 month lag
-bankdata.in.new$repdte_adjust<- bankdata.in.new$repdte %m+% months(3)
-
-#Total assets
-model3<- glm(bankdata.in.new$Default.Flag ~ bankdata.in.new$asset , family= binomial(link = logit),na.action = na.exclude)
-
-#plot model
-plot(bankdata.in.new$asset, bankdata.in.new$Default.Flag, pch = 16, xlab = "Asset", ylab = "PD")
-xweight <- seq(1, 1768657000, 1768657000/721110)
-yweight <- predict(model3, list(wt = xweight),type="response")
-lines(xweight, yweight)
-
-
 
