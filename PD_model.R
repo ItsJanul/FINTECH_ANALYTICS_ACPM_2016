@@ -1,4 +1,4 @@
-#PROBABILITY OF DEFAULT MODEL V1.0
+#PROBABILITY OF DEFAULT MODEL V2.0
 #Created by Janul and Amir
 #Fintech Analytics (INTA-GB.2320.10)
 #FALL 2016
@@ -7,38 +7,12 @@
 library(lubridate)
 library(tidyverse)
 library(microbenchmark)
+library(caTools)
 
 #change # of rows to print on tibble
 options(tibble.print_max = 1000, tibble.print_min = 200)
 
 #FUNCTIONS-----------------------------------------------------------------
-
-#FUNCTION TO CALCULATE AUC ROC FOR 2 DIFFERENT SUBSET OF A SINGLE DATASET
-subROC <- function(x,	split.val,	split.on,	score,	outcome)
-{
-  len <- nrow(x)
-  idx <- 1:len
-  
-  filt <- split.on	<=	split.val
-  
-  score.1 <- score[filt]
-  outcome.1 <- outcome[filt]
-  idx.1 <- idx[filt]
-  score.2 <- score[!filt]
-  outcome.2 <- outcome[!filt]
-  idx.2 <- idx[!filt]
-  
-  #use favorite AUC function here
-  AUC.1 <- colAUC(data.frame(score.1), outcome.1,	alg = c(ROC))
-  AUC.2 <- colAUC(data.frame(score.2), outcome.2, alg = c(ROC))
-  
-  AUCs<-c(AUC.1,AUC.2)
-  #	AUCs<-ifelse(AUCs<0.5,1-AUCs,AUCs)
-  ret<-list(AUCs=AUCs,	idx.1=idx.1,	idx.2=idx.2)
-    
-      
-  return(ret)
-}
 
 #FUNCTION TO CALCULATE DENSITY ESTIMATES  
 densityMap	<-	function(x,outcome,k=25,plot=T,xaxis="breaks",spar=0.5)	
@@ -119,12 +93,29 @@ transformVar <- function(x, outcome, k=25, plot=T, xaxis="breaks", forceZero = F
 }
 
 #FUNCTION TO PUSH TRANFORM VARIABLES TO df
-pushTfrm2DF<- function(df, debt, lev, liq, prof, size){
+pushTfrm2TRAIN<- function(df, debt, lev, liq, prof, size){
   df$debtT<- debt[[3]]
   df$levT<- lev[[3]]
   df$liqT<- liq[[3]]
   df$profT<- prof[[3]]
   df$sizeT<- size[[3]]
+  
+  return(df)
+}
+
+#FUNCTION TO TRANSFORM VARIBLES TO TEST df
+pushTfrm2TEST<- function(df, debt, lev, liq, prof, size, naRemove= F){
+  df$debtT<- applyDensityMap(df$noi_int ,debt, forceZero = T)
+  df$levT<- applyDensityMap(df$lev ,lev, forceZero = T)
+  df$liqT<- applyDensityMap(df$rbc1rwaj ,liq, forceZero = T)
+  df$profT<- applyDensityMap(df$roaptx ,prof, forceZero = T)
+  df$sizeT<- applyDensityMap(df$asset5 ,size, forceZero = T)
+  
+  if(naRemove){
+    df<- df %>%
+      filter(!is.na(profT)) %>%
+      filter(!is.na(rbc1rwaj))
+  }
   
   return(df)
 }
@@ -139,6 +130,79 @@ autoCal<- function(x, outcome, k=25, plot=T, xaxis="breaks")
     output<-transformVar(x , outcome, k , plot , xaxis)
     print(summary(output[[3]])[[1]])
     print(k)
+  }
+  return(output)
+}
+
+#THE WALKFORWARD BIG MOMMA: SEND THE DATAFRAME IT DOES THE REST
+#THIS FUNCTION CALCULATES NEW FITS ACCORDING TO ADDITIONAL DATA,
+#REMOVES ALL NA's FROM TEST SET
+#RETURNS A LIST OF (YEAR, )
+walkForwardDf<- function(df, yearX=2007, yearOutofSample=1){
+  
+  i=1
+  output<-list()
+  
+  while(yearX<year(max(df$repdte.adjust))){
+    
+    train.data<- df %>%
+      filter(year(repdte.adjust)<yearX) %>%
+      select(ID, repdte.adjust, Default.Date, roaptx, lev, noi_int, rbc1rwaj, asset5, default.flag)
+    
+    test.data<- df %>%
+      filter(year(repdte.adjust)==(yearX+yearOutofSample)) %>%
+      select(ID, repdte.adjust, Default.Date, roaptx, lev, noi_int, rbc1rwaj, asset5, default.flag)
+    
+    ##calculating new fits
+    #PROFIT
+    profit.fit<-transformVar(train.data$roaptx, 
+                             train.data$default.flag, 
+                             k=50, plot = F, xaxis = "roaptx")
+    
+    #MEASURE OF LEVERAGE: 
+    leverage.fit<-transformVar(train.data$lev, 
+                               train.data$default.flag, 
+                               k=35, plot = T, xaxis = "leverage", forceZero = T)
+    
+    #MEASURES OF DEBT COVERAGE: 
+    debt.fit<-transformVar(train.data$noi_int, 
+                           train.data$default.flag, 
+                           k=60, plot = T, xaxis = "debt_coverage")
+    
+    #MEASURE OF LIQUIDITY: 
+    liquidity.fit<- transformVar(train.data$rbc1rwaj, 
+                                 train.data$default.flag, 
+                                 k=30, plot = T, xaxis = "liquidity", forceZero = T)
+    
+    #MEASURE OF SIZE: 
+    size.fit<-transformVar(train.data$asset5, 
+                           train.data$default.flag,
+                           k=11, plot = T, xaxis = "assets")
+    
+    #TRANSFORMING VARIABLES
+    train.data<- pushTfrm2TRAIN(train.data, debt.fit, leverage.fit, liquidity.fit, profit.fit, size.fit)
+    test.data.RAW<- pushTfrm2TEST(test.data, debt.fit, leverage.fit, liquidity.fit, profit.fit, size.fit, naRemove = F)
+    test.data.clean<- pushTfrm2TEST(test.data, debt.fit, leverage.fit, liquidity.fit, profit.fit, size.fit, naRemove = T)
+    
+    #CREATING NEW MODEL AND CALCULATIONS
+    model<-glm(default.flag ~ debtT + levT + liqT + profT + sizeT,family=binomial(link="logit"),
+                       data=train.data, na.action=na.exclude)
+    
+    #Clean dataset passed, no NA's the length of the predict vector may differ
+    predict.clean<-predict(model , newdat = test.data.clean , type="response",na.action=na.pass)
+    
+    #RAW dataset all NA's passed, this can't be used to calculate ROC due to NA inclusion.
+    predict.raw<-predict(model , newdat = test.data.RAW , type="response",na.action=na.pass)
+    
+    rocAUC<-colAUC(data.frame(model= predict.clean), test.data.clean$default.flag, plotROC=TRUE, alg=c("ROC"))
+    
+    #step forward in list and return year, training data, test data, model, predictClean, predictRAW 
+    output[[i]]<-list(year=yearX, train=train.data, test=test.data.clean, model= model, predictClean=predict.clean, 
+                      predictRAW=predict.raw, rocAUC= rocAUC,
+                      fit= list(prof=profit.fit,lev=leverage.fit, debt=debt.fit, size=size.fit, liq=liquidity.fit))
+    
+    yearX=yearX+yearOutofSample  
+    i= i+1
   }
   return(output)
 }
@@ -159,12 +223,12 @@ defaultTimeline <-function (df)
 }
 
 
+
 #RUNNING CODE--------------------------------------------------------------
 
 #creating a tibble called bankdata
 bankdata<-as_data_frame(bankdata.in.new)
-head(bankdata)
-
+head(bankdata, 10)
 
 #Cleaning tibble and reading all date columns as dates.
 #Stepping forward report date by 3 months
@@ -236,7 +300,7 @@ liquidity.fit<- autoCal(train.data$rbc1rwaj,
                         train.data$default.flag, 
                         k=20, plot = T, xaxis = "liquidity")
 
-#I force k=30 with forceZero set to true the negative min is very small
+#I force k=30 with forceZero set to true to remove the negative min's is very small
 liquidity.fit<- transformVar(train.data$rbc1rwaj, 
                              train.data$default.flag, 
                              k=30, plot = T, xaxis = "liquidity", forceZero = T)
@@ -249,24 +313,49 @@ size.fit<-autoCal(train.data$asset5,
                   train.data$default.flag,
                   k=11, plot = T, xaxis = "assets")
 
-#PUSHING ALL TRANSFORMED VARIABLES ONTO train.data
-train.data<- pushTfrm2DF(train.data, debt.fit, leverage.fit, liquidity.fit, profit.fit, size.fit)
+#PUSHING ALL TRANSFORMED VARIABLES ONTO BOTH DATA SETS-----
+train.data<- pushTfrm2TRAIN(train.data, debt.fit, leverage.fit, liquidity.fit, profit.fit, size.fit)
+test.data<- pushTfrm2TEST(test.data, debt.fit, leverage.fit, liquidity.fit, profit.fit, size.fit)
+test.data.clean<- pushTfrm2TEST(test.data, debt.fit, leverage.fit, liquidity.fit, profit.fit, size.fit, naRemove = T)
 
 #CREATING GLM FOR OUR VARIABLES----------------
-my.first.model<-glm(default.flag ~ debtT + levT + liqT + profT + sizeT,family=binomial(link="logit"),
+
+#this is our multi-variate model (all 5 are included)
+multi.variate<-glm(default.flag ~ debtT + levT + liqT + profT + sizeT,family=binomial(link="logit"),
                     data=train.data, na.action=na.exclude)
 
-summary(my.first.model)
-round(summary(my.first.model$fitted.values),5)
+predict.multi.variate<-predict(multi.variate , newdat=test.data.clean , type="response",na.action=na.pass)
 
-nondefault.records<-my.first.model$y==0 #actual non-defaulted firms
-default.records<- my.first.model$y==1 #actual defaults
-n.ndef<-sum(nondefault.records, na.rm=T)
-n.def<-sum(default.records,na.rm=T)
+#this is our scalable model, with the variables (leverage and assets) with no NA's
+scalable.model<-glm(default.flag ~ lev + sizeT ,family=binomial(link="logit"),
+                    data=train.data, na.action=na.exclude)
 
-ndef.PDs<- my.first.model$fitted.values[nondefault.records] #model estimates for non-defaulted firms
-def.PDs<- my.first.model$fitted.values[default.records] #model estimates for defaulted firms
+predict.scalable<-predict(scalable.model , newdat=test.data.clean , type="response",na.action=na.pass)
 
-W<-wilcox.test(x=def.PDs,y=ndef.PDs,paired=FALSE)
-aprox.AUC<- W$statistic/(n.ndef*n.def)
-aprox.AUC
+#comparing ROC curves we see that our multiVariate model is much more powerfull and accurate than our scalable model
+output.Scale<-colAUC(data.frame(scalable=predict.scalable, multi_variate= predict.multi.variate), 
+                     test.data.clean$default.flag, plotROC=TRUE, alg=c("ROC"))
+
+#LAST STEP----
+#I would like to now use our multi-variable model but step it forward past 2007 and 
+#see if the addition of incremental years make it more powerfull, over here I call the "do all function"
+#walkForwardDf DOES EVERYTHING WE JUST DID ABOVE BY ITSELF AND WALKS FORWARD A YEAR
+#NOTE this function is set on the number of baskets for variable transformation it no longer autoCals
+#it returns a large list of important variables I would recommend reading over the function
+allModels<-walkForwardDf(bankdata)
+
+#From the AUCs collected of all the walk forward models 2007, 2008, and 2009 I will choose the 2009 model since it has 
+#the highest AUC from the 3:
+
+paste("Year: ", allModels[[1]]$year, " rocAUC: ", round(allModels[[1]]$rocAUC, 5))
+paste("Year: ", allModels[[2]]$year, " rocAUC: ", round(allModels[[2]]$rocAUC, 5))
+paste("Year: ", allModels[[3]]$year, " rocAUC: ", round(allModels[[3]]$rocAUC, 5))
+
+#"Year:  2007  rocAUC:  0.89672"
+#"Year:  2008  rocAUC:  0.947"
+#"Year:  2009  rocAUC:  0.97373"
+
+#The following code will be used to generate PD's for the holdout sample:
+
+
+       
