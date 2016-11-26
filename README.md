@@ -7,7 +7,8 @@ accurate PD's.
 Will need to revisit this and add instructions on how to use the various functions.
 
 #Questions
-Don't hesitate to reach out. My twitter handle is: ItsJanul
+Don't hesitate to reach out.
+You can find my twitter [here] (https://twitter.com/itsjanul) for any suggestions! 
 
-## `Data`
-Dataset will be uploaded shortly
+#Data
+Dataset will be uploaded shortly.
