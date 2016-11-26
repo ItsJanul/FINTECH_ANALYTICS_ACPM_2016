@@ -1,5 +1,13 @@
 # Credit Default Modeling Algorithm
-The entent of this code is to determine a Probability of Default for a bank. 
+This code was based on a term long project for Fintech Analytics with Professor Stein.
+The code has methods to transform key variables and us multi-variate analysis to predict
+accurate PD's.
+
+#Instructions
+Will need to revisit this and add instructions on how to use the various functions.
+
+#Questions
+Don't hesitate to reach out. My twitter handle is: ItsJanul
 
 ## `Data`
 Dataset will be uploaded shortly
