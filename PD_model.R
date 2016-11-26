@@ -6,7 +6,6 @@
 #LIBRARIES-----------------------------------------------------------------
 library(lubridate)
 library(tidyverse)
-library(microbenchmark)
 library(caTools)
 
 #change # of rows to print on tibble
@@ -85,14 +84,14 @@ applyDensityMap	<-	function(x,	map, forceZero = F)
 }
 
 #FUNCTION TO TRANSFORM VARIABLE TO PD
-transformVar <- function(x, outcome, k=25, plot=T, xaxis="breaks", forceZero = F)
+transformVar <- function(x, outcome, k=25, plot=F, xaxis="breaks", forceZero = F)
 {
   fit<- densityMap(x, outcome, k=k, plot=plot, xaxis=xaxis)
   output<- applyDensityMap(x, fit, forceZero)
   return(list(baseline=fit[[1]], map=fit[[2]], transformedVar=output, buckets=k))
 }
 
-#FUNCTION TO PUSH TRANFORM VARIABLES TO df
+#FUNCTION TO PUSH TRANFORM VARIABLES TO TRAIN df
 pushTfrm2TRAIN<- function(df, debt, lev, liq, prof, size){
   df$debtT<- debt[[3]]
   df$levT<- lev[[3]]
@@ -134,10 +133,11 @@ autoCal<- function(x, outcome, k=25, plot=T, xaxis="breaks")
   return(output)
 }
 
-#THE WALKFORWARD BIG MOMMA: SEND THE DATAFRAME IT DOES THE REST
+#THE WALKFORWARD FUNCTION: SEND THE DATAFRAME IT DOES THE REST
 #THIS FUNCTION CALCULATES NEW FITS ACCORDING TO ADDITIONAL DATA,
 #REMOVES ALL NA's FROM TEST SET
-#RETURNS A LIST OF (YEAR, )
+#RETURNS A LIST OF (YEAR, MODEL, TEST DATA, TRAIN DATA, RAW PREDICT,
+#CLEAN PREDICT, ROC FOR MODEL)
 walkForwardDf<- function(df, yearX=2007, yearOutofSample=1){
   
   i=1
@@ -224,7 +224,7 @@ defaultTimeline <-function (df)
 
 
 
-#RUNNING CODE--------------------------------------------------------------
+#ITEM2: RUNNING CODE--------------------------------------------------------------
 
 #creating a tibble called bankdata
 bankdata<-as_data_frame(bankdata.in.new)
@@ -268,9 +268,9 @@ test.data<- bankdata %>%
 #MEASURE OF PROFITABILITY: 
 #Pre-tax return on assets- "roaptx" 
 #We run the autoCal which tries to find the best fit, I chose 50 buckets.
-profit.fit<-autoCal(train.data$roaptx, 
+profit.fit<-transformVar(train.data$roaptx, 
                     train.data$default.flag, 
-                    k=50, plot = F, xaxis = "roaptx")
+                    k=50, plot = T, xaxis = "profitability", forceZero = T)
 
 #MEASURE OF LEVERAGE: 
 #Total asset over total liability- "asset/liability"
@@ -327,7 +327,7 @@ multi.variate<-glm(default.flag ~ debtT + levT + liqT + profT + sizeT,family=bin
 predict.multi.variate<-predict(multi.variate , newdat=test.data.clean , type="response",na.action=na.pass)
 
 #this is our scalable model, with the variables (leverage and assets) with no NA's
-scalable.model<-glm(default.flag ~ lev + sizeT ,family=binomial(link="logit"),
+scalable.model<-glm(default.flag ~ levT + sizeT ,family=binomial(link="logit"),
                     data=train.data, na.action=na.exclude)
 
 predict.scalable<-predict(scalable.model , newdat=test.data.clean , type="response",na.action=na.pass)
@@ -337,25 +337,52 @@ output.Scale<-colAUC(data.frame(scalable=predict.scalable, multi_variate= predic
                      test.data.clean$default.flag, plotROC=TRUE, alg=c("ROC"))
 
 #LAST STEP----
-#I would like to now use our multi-variable model but step it forward past 2007 and 
+#I would like to now use our multi-variable model but step it forward starting in 2005 and 
 #see if the addition of incremental years make it more powerfull, over here I call the "do all function"
 #walkForwardDf DOES EVERYTHING WE JUST DID ABOVE BY ITSELF AND WALKS FORWARD A YEAR
 #NOTE this function is set on the number of baskets for variable transformation it no longer autoCals
 #it returns a large list of important variables I would recommend reading over the function
-allModels<-walkForwardDf(bankdata)
+allModels<-walkForwardDf(bankdata, yearX=2007)
 
-#From the AUCs collected of all the walk forward models 2007, 2008, and 2009 I will choose the 2009 model since it has 
-#the highest AUC from the 3:
+#From the AUCs collected of all the walk forward models 2005, 2006, 2007, 2008, and 2009 I will choose the 2009 
+#model since it has the highest AUC from the 5:
 
 paste("Year: ", allModels[[1]]$year, " rocAUC: ", round(allModels[[1]]$rocAUC, 5))
 paste("Year: ", allModels[[2]]$year, " rocAUC: ", round(allModels[[2]]$rocAUC, 5))
 paste("Year: ", allModels[[3]]$year, " rocAUC: ", round(allModels[[3]]$rocAUC, 5))
+paste("Year: ", allModels[[4]]$year, " rocAUC: ", round(allModels[[4]]$rocAUC, 5))
+paste("Year: ", allModels[[5]]$year, " rocAUC: ", round(allModels[[5]]$rocAUC, 5))
 
+#"Year:  2005  rocAUC:  0.79439"
+#"Year:  2006  rocAUC:  0.78278"
 #"Year:  2007  rocAUC:  0.89672"
 #"Year:  2008  rocAUC:  0.947"
 #"Year:  2009  rocAUC:  0.97373"
 
-#The following code will be used to generate PD's for the holdout sample:
+
+#ITEM 4: MODEL TO GENERATE PD's---------
+model2009<-allModels[[5]]$model
+
+#The following functions will be used to predict clean and RAW pds for the new dataset:
 
 
-       
+holdout.data <- pushTfrm2TEST(holdout.data, 
+                          allModels[[5]]$fit$debt, 
+                          allModels[[5]]$fit$lev, 
+                          allModels[[5]]$fit$liq, 
+                          allModels[[5]]$fit$prof, 
+                          allModels[[5]]$fit$size)
+
+holdout.data.clean <- pushTfrm2TEST(holdout.data, 
+                                allModels[[5]]$fit$debt, 
+                                allModels[[5]]$fit$lev, 
+                                allModels[[5]]$fit$liq, 
+                                allModels[[5]]$fit$prof, 
+                                allModels[[5]]$fit$size, naRemove = T)
+
+
+predict.holdout.raw<- predict(model2009 , newdat=holdout.data , type="response",na.action=na.pass)
+predict.holdout.clean<- predict(model2009 , newdat=holdout.data.clean , type="response",na.action=na.pass)
+
+
+
