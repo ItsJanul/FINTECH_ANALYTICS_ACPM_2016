@@ -1,4 +1,4 @@
-#PROBABILITY OF DEFAULT MODEL V2.0
+#PROBABILITY OF DEFAULT MODEL V2.2
 #Created by Janul and Amir
 #Fintech Analytics (INTA-GB.2320.10)
 #FALL 2016
@@ -7,11 +7,22 @@
 library(lubridate)
 library(tidyverse)
 library(caTools)
+library(rms)
+
+#for variable testing
+library(Hmisc)
+library(corrplot)
+
+#DO NOT ATTACH THIS PACKAGE IF YOU ARE USING PIPES
+#ITS SELECT FUNCTION OVERWRITE DPLYR SELECT
+library(usdm)
 
 #change # of rows to print on tibble
 options(tibble.print_max = 1000, tibble.print_min = 200)
 
-#FUNCTIONS-----------------------------------------------------------------
+#--------------------------------------------------------------------------
+#FUNCTIONS----
+#--------------------------------------------------------------------------
 
 #FUNCTION TO CALCULATE DENSITY ESTIMATES  
 densityMap	<-	function(x,outcome,k=25,plot=T,xaxis="breaks",spar=0.5)	
@@ -216,15 +227,16 @@ defaultTimeline <-function (df)
       group_by(yearx= year(Default.Date)) %>%
       summarise(number_banks = n_distinct(ID)) %>%
       ggplot(., aes(x = yearx, y = number_banks)) + 
-          geom_area() + 
+          geom_area(fill = "red") + 
           ggtitle("Bank Defaults") + 
           labs(x = "Year", y = "Total Defaults")
     return(output)
 }
 
 
-
-#ITEM2: RUNNING CODE--------------------------------------------------------------
+#--------------------------------------------------------------------------
+#ITEM2: RUNNING CODE----
+#--------------------------------------------------------------------------
 
 #creating a tibble called bankdata
 bankdata<-as_data_frame(bankdata.in.new)
@@ -238,18 +250,35 @@ bankdata<- bankdata %>%
   mutate(repdte.adjust= repdte %m+% months(3)) %>%
   mutate(days.to.default= ifelse (is.na(Default.Date), NA, 
                                   Default.Date-repdte.adjust)) %>%
-  mutate(default.flag= ifelse (is.na(days.to.default), 0, ifelse(days.to.default >0 & days.to.default <= 365.25, 1, 0)))
+  mutate(default.flag= ifelse (is.na(days.to.default), 0, 
+                               ifelse(days.to.default >0 & days.to.default <= 365.25, 1, 0))) %>%
+  ##Pre-tax Net operating income over interest expense- "idpretx/eintexp" create variable
+  mutate(noi_int=idpretx/(eintexp+1)) %>%
+  ##Total asset over total liability- "asset/liability" create variable
+  mutate(lev=asset/(liab+1)) %>%
+  select(ID, repdte.adjust, Default.Date, roaptx, lev, noi_int, rbc1rwaj, 
+         asset5, default.flag)
 
-#Here I am creating variables I know I will need
-##Pre-tax Net operating income over interest expense- "idpretx/eintexp" create variable
-bankdata$noi_int<-bankdata$idpretx/(bankdata$eintexp+1)
+#--------------------------------------------------------------------------
+#CHECKING VARIABLES FOR COLINEARITY AND VIF
+#--------------------------------------------------------------------------
 
-##Total asset over total liability- "asset/liability" create variable
-bankdata$lev<-bankdata$asset/(bankdata$liab+1)
+correlation.data <- select(bankdata, roaptx, lev, noi_int, rbc1rwaj, asset5)
 
-#Viewing defaults volume in dataset
+res2 <- rcorr(as.matrix(correlation.data))
+vif<-vif(correlation.data)
+
+#plotting correlation
+corrplot(res2$r, type = "upper", order = "hclust", 
+         tl.col = "black", tl.srt = 45)
+
+#VIEWING DEFAULT VOLUME
 ##need to send dates as Default.Date and bank ids as ID
 defaultTimeline(bankdata)
+
+#--------------------------------------------------------------------------
+#Splitting data
+#--------------------------------------------------------------------------
 
 #Noticed that defaults started occuring around 2007 want to get some of that data in the training sample
 #Setting training set according to time 2007
@@ -262,8 +291,9 @@ test.data<- bankdata %>%
   filter(year(repdte.adjust)==2008) %>%
   select(ID, repdte.adjust, Default.Date, roaptx, lev, noi_int, rbc1rwaj, asset5, default.flag)
 
-
+#--------------------------------------------------------------------------
 #TRANSFORMING VARIABLES TO A MAP----------------
+#--------------------------------------------------------------------------
 
 #MEASURE OF PROFITABILITY: 
 #Pre-tax return on assets- "roaptx" 
@@ -286,10 +316,10 @@ leverage.fit<-transformVar(train.data$lev,
 
 #MEASURES OF DEBT COVERAGE: 
 #Pre-tax Net operating income over interest expense- "idpretx/eintexp"
-#We run autoCal which works extremely well on this datasample. It buckets at 50.
+#We run autoCal which works extremely well on this datasample. It buckets at 60.
 debt.fit<-autoCal(train.data$noi_int, 
                   train.data$default.flag, 
-                  k=60, plot = T, xaxis = "debt_coverage")
+                  k=25, plot = T, xaxis = "debt_coverage")
 
 #MEASURE OF LIQUIDITY: 
 #Tier 1 Capital over Total risk-weight assets- "rbc1rwaj"
@@ -318,13 +348,15 @@ train.data<- pushTfrm2TRAIN(train.data, debt.fit, leverage.fit, liquidity.fit, p
 test.data<- pushTfrm2TEST(test.data, debt.fit, leverage.fit, liquidity.fit, profit.fit, size.fit)
 test.data.clean<- pushTfrm2TEST(test.data, debt.fit, leverage.fit, liquidity.fit, profit.fit, size.fit, naRemove = T)
 
-#CREATING GLM FOR OUR VARIABLES----------------
+#--------------------------------------------------------------------------
+#TESTING DIFFERENT MODELS----
+#--------------------------------------------------------------------------
 
 #this is our multi-variate model (all 5 are included)
-multi.variate<-glm(default.flag ~ debtT + levT + liqT + profT + sizeT,family=binomial(link="logit"),
+multi.variate.model<-glm(default.flag ~ debtT + levT + liqT + profT + sizeT,family=binomial(link="logit"),
                     data=train.data, na.action=na.exclude)
 
-predict.multi.variate<-predict(multi.variate , newdat=test.data.clean , type="response",na.action=na.pass)
+predict.multi.variate<-predict(multi.variate.model , newdat=test.data.clean , type="response",na.action=na.pass)
 
 #this is our scalable model, with the variables (leverage and assets) with no NA's
 scalable.model<-glm(default.flag ~ levT + sizeT ,family=binomial(link="logit"),
@@ -332,11 +364,33 @@ scalable.model<-glm(default.flag ~ levT + sizeT ,family=binomial(link="logit"),
 
 predict.scalable<-predict(scalable.model , newdat=test.data.clean , type="response",na.action=na.pass)
 
+
+#this is our rcart model
+ML_model <- rpart(default.flag ~ debtT + levT + liqT + profT + sizeT,data=train.data, control=list(minsplit=5))
+
+#plotting splits
+ML_model.plot<- rpart.plot(ML_model)
+
+predict.ml_model<- predict(ML_model,test.data.clean)
+
+
 #comparing ROC curves we see that our multiVariate model is much more powerfull and accurate than our scalable model
-output.Scale<-colAUC(data.frame(scalable=predict.scalable, multi_variate= predict.multi.variate), 
+output.Scale<-colAUC(data.frame(scalable=predict.scalable, multi_variate= predict.multi.variate, ML_model= predict.ml_model), 
                      test.data.clean$default.flag, plotROC=TRUE, alg=c("ROC"))
 
+
+#creating 1 more model which uses identified factors from ML and logit
+ml_glm.model<-glm(default.flag ~ profT + liqT ,family=binomial(link="logit"),
+                    data=train.data, na.action=na.exclude)
+
+predict.ml_glm<-predict(ml_glm.model , newdat=test.data.clean , type="response",na.action=na.pass)
+
+
+#--------------------------------------------------------------------------
 #LAST STEP----
+#--------------------------------------------------------------------------
+
+
 #I would like to now use our multi-variable model but step it forward starting in 2005 and 
 #see if the addition of incremental years make it more powerfull, over here I call the "do all function"
 #walkForwardDf DOES EVERYTHING WE JUST DID ABOVE BY ITSELF AND WALKS FORWARD A YEAR
@@ -365,6 +419,20 @@ model2009<-allModels[[5]]$model
 
 #The following functions will be used to predict clean and RAW pds for the new dataset:
 
+holdout.data<- bankdata.holdout %>%
+  mutate(Default.Date= mdy(Default.Date)) %>%
+  mutate(repdte.adjust= repdte %m+% months(3)) %>%
+  mutate(days.to.default= ifelse (is.na(Default.Date), NA, 
+                                  Default.Date-repdte.adjust)) %>%
+  mutate(default.flag= ifelse (is.na(days.to.default), 0, ifelse(days.to.default >0 & days.to.default <= 365.25, 1, 0))) %>%
+  mutate(noi_int=idpretx/(eintexp+1)) %>%
+  mutate(lev=asset/(liab+1)) %>%
+  select(ID, repdte.adjust, Default.Date, roaptx, lev, noi_int, rbc1rwaj, asset5, default.flag)
+
+# holdout.data<- holdout.data %>%
+#   mutate(noi_int=idpretx/(eintexp+1)) %>%
+#   mutate(lev=asset/(liab+1)) %>%
+#   select(ID, roaptx, lev, noi_int, rbc1rwaj, asset5)
 
 holdout.data <- pushTfrm2TEST(holdout.data, 
                           allModels[[5]]$fit$debt, 
@@ -384,5 +452,7 @@ holdout.data.clean <- pushTfrm2TEST(holdout.data,
 predict.holdout.raw<- predict(model2009 , newdat=holdout.data , type="response",na.action=na.pass)
 predict.holdout.clean<- predict(model2009 , newdat=holdout.data.clean , type="response",na.action=na.pass)
 
+output.Scale.holdout<-colAUC(data.frame(holdout= predict.holdout.clean ), 
+                     holdout.data.clean$default.flag, plotROC=TRUE, alg=c("ROC"))
 
 
